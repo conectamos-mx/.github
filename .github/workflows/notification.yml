@@ -1,0 +1,83 @@
+name: Notify
+
+on:
+    workflow_call:
+        inputs:
+            status:
+                required: true
+                type: string
+            environment:
+                required: true
+                type: string
+            service_name:
+                required: true
+                type: string
+            service_url:
+                required: true
+                type: string
+            commit_sha:
+                required: false
+                type: string
+                default: ""
+            actor:
+                required: false
+                type: string
+                default: ""
+            run_id:
+                required: false
+                type: string
+                default: ""
+            repository:
+                required: false
+                type: string
+                default: ""
+        secrets:
+            DEVOPS_WEBHOOK_URL:
+                required: true
+
+jobs:
+    notify:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code (only on success to read commit message)
+              if: inputs.status == 'success'
+              uses: actions/checkout@v4
+
+            - name: Send notification to Slack
+              shell: bash
+              env:
+                  WEBHOOK_URL: ${{ secrets.DEVOPS_WEBHOOK_URL }}
+              run: |
+                  set -euo pipefail
+
+                  COMMIT_SHA_SHORT="$(echo "${{ inputs.commit_sha }}" | cut -c1-7)"
+                  COMMIT_MSG="$(git log -1 --pretty=%B | head -n 1 2>/dev/null || echo "Manual deployment")"
+                  NOW_UTC="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+                  if [ "${{ inputs.status }}" = "success" ]; then
+                    STATUS_LINE="✅ *Deployment exitoso - ${{ inputs.service_name }}*"
+                  else
+                    STATUS_LINE="❌ *Deployment falló - ${{ inputs.service_name }}*"
+                  fi
+
+                  # Slack message as mrkdwn (real newlines via printf)
+                  TEXT="$(printf '*[ DEPLOYMENT LOG ]*\n%s\n\n🌐 *URL:* %s\n📦 *Servicio:* %s (%s)\n🔨 *Commit:* %s (`%s`)\n👤 *Por:* %s\n⏰ *Hora:* %s' \
+                    "${STATUS_LINE}" \
+                    "${{ inputs.service_url }}" \
+                    "${{ inputs.service_name }}" "${{ inputs.environment }}" \
+                    "${COMMIT_MSG}" "${COMMIT_SHA_SHORT}" \
+                    "${{ inputs.actor }}" \
+                    "${NOW_UTC}")"
+
+                  export TEXT
+
+                  PAYLOAD="$(python3 -c 'import json,os; t=os.environ["TEXT"]; print(json.dumps({
+                    "blocks": [
+                      {"type": "section", "text": {"type": "mrkdwn", "text": t}}
+                    ]
+                  }))')"
+
+                  curl -sS -X POST \
+                    -H 'Content-type: application/json; charset=utf-8' \
+                    --data "$PAYLOAD" \
+                    "$WEBHOOK_URL"
