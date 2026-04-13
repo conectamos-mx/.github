@@ -39,8 +39,7 @@ jobs:
     notify:
         runs-on: ubuntu-latest
         steps:
-            - name: Checkout code (only on success to read commit message)
-              if: inputs.status == 'success'
+            - name: Checkout code
               uses: actions/checkout@v4
 
             - name: Send notification to Slack
