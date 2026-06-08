@@ -34,24 +34,38 @@ on:
         secrets:
             DEVOPS_WEBHOOK_URL:
                 required: true
+            SLACK_MEMBERS_MAP:
+                required: false
 
 jobs:
     notify:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout code
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
 
             - name: Send notification to Slack
               shell: bash
               env:
                   WEBHOOK_URL: ${{ secrets.DEVOPS_WEBHOOK_URL }}
+                  SLACK_MEMBERS_MAP: ${{ secrets.SLACK_MEMBERS_MAP }}
               run: |
                   set -euo pipefail
 
                   COMMIT_SHA_SHORT="$(echo "${{ inputs.commit_sha }}" | cut -c1-7)"
                   COMMIT_MSG="$(git log -1 --pretty=%B | head -n 1 2>/dev/null || echo "Manual deployment")"
                   NOW_UTC="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+                  # Resolve Slack @mention for the actor on failures
+                  SLACK_MENTION=""
+                  if [ "${{ inputs.status }}" != "success" ] && [ -n "${SLACK_MEMBERS_MAP:-}" ]; then
+                    ACTOR="${{ inputs.actor }}"
+                    export ACTOR
+                    SLACK_ID="$(python3 -c 'import json,os; m=json.loads(os.environ.get("SLACK_MEMBERS_MAP","{}") or "{}"); print(m.get(os.environ.get("ACTOR",""),""))' 2>/dev/null || true)"
+                    if [ -n "$SLACK_ID" ]; then
+                      SLACK_MENTION="<@${SLACK_ID}> "
+                    fi
+                  fi
 
                   if [ "${{ inputs.status }}" = "success" ]; then
                     STATUS_LINE="✅ *Deployment exitoso - ${{ inputs.service_name }}*"
@@ -60,13 +74,14 @@ jobs:
                   fi
 
                   # Slack message as mrkdwn (real newlines via printf)
-                  TEXT="$(printf '*[ DEPLOYMENT LOG ]*\n%s\n\n🌐 *URL:* %s\n📦 *Servicio:* %s (%s)\n🔨 *Commit:* %s (`%s`)\n👤 *Por:* %s\n⏰ *Hora:* %s' \
+                  TEXT="$(printf '*[ DEPLOYMENT LOG ]*\n%s\n\n🌐 *URL:* %s\n📦 *Servicio:* %s (%s)\n🔨 *Commit:* %s (`%s`)\n👤 *Por:* %s\n⏰ *Hora:* %s%s' \
                     "${STATUS_LINE}" \
                     "${{ inputs.service_url }}" \
                     "${{ inputs.service_name }}" "${{ inputs.environment }}" \
                     "${COMMIT_MSG}" "${COMMIT_SHA_SHORT}" \
                     "${{ inputs.actor }}" \
-                    "${NOW_UTC}")"
+                    "${NOW_UTC}" \
+                    "${SLACK_MENTION:+$'\n'"${SLACK_MENTION}"}")"
 
                   export TEXT
 
