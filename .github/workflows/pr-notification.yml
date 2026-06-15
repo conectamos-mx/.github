@@ -1,0 +1,106 @@
+name: PR Notify
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: string
+      pr_title:
+        required: true
+        type: string
+      pr_url:
+        required: true
+        type: string
+      pr_author:
+        required: true
+        type: string
+      repository:
+        required: true
+        type: string
+      head_branch:
+        required: true
+        type: string
+      base_branch:
+        required: true
+        type: string
+      reviewer:
+        required: false
+        type: string
+        default: ""
+      is_merged:
+        required: false
+        type: string
+        default: "false"
+    secrets:
+      PR_ALERTS_URL:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send PR alert to Slack
+        shell: bash
+        env:
+          WEBHOOK_URL: ${{ secrets.PR_ALERTS_URL }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_URL: ${{ inputs.pr_url }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_AUTHOR: ${{ inputs.pr_author }}
+          REPOSITORY: ${{ inputs.repository }}
+          HEAD_BRANCH: ${{ inputs.head_branch }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          REVIEWER: ${{ inputs.reviewer }}
+          ACTION: ${{ inputs.action }}
+          IS_MERGED: ${{ inputs.is_merged }}
+        run: |
+          set -euo pipefail
+
+          NOW_UTC="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          REPO_SLUG="$(echo "$REPOSITORY" | cut -d'/' -f2)"
+
+          case "$ACTION" in
+            opened)             HEADER="🔔 *Nueva PR abierta*" ;;
+            ready_for_review)   HEADER="👀 *PR lista para review*" ;;
+            review_requested)   HEADER="👀 *Review solicitado*" ;;
+            reopened)           HEADER="🔁 *PR reabierta*" ;;
+            closed)
+              if [ "$IS_MERGED" = "true" ]; then
+                HEADER="✅ *PR mergeada*"
+              else
+                HEADER="🚫 *PR cerrada sin merge*"
+              fi
+              ;;
+            *)                  HEADER="📋 *PR actualizada*" ;;
+          esac
+
+          REVIEWER_LINE=""
+          if [ -n "$REVIEWER" ]; then
+            REVIEWER_LINE="$(printf '\n👀 *Reviewer:* %s' "$REVIEWER")"
+          fi
+
+          TEXT="$(printf '*[ PR LOG ]* — %s\n\n🔗 *PR:* <%s|#%s — %s>\n📦 *Repo:* %s\n🌿 *Branches:* \`%s\` → \`%s\`\n👤 *Autor:* %s%s\n⏰ *Hora:* %s' \
+            "$HEADER" \
+            "$PR_URL" "$PR_NUMBER" "$PR_TITLE" \
+            "$REPO_SLUG" \
+            "$HEAD_BRANCH" "$BASE_BRANCH" \
+            "$PR_AUTHOR" \
+            "$REVIEWER_LINE" \
+            "$NOW_UTC")"
+
+          export TEXT
+
+          PAYLOAD="$(python3 -c 'import json,os; t=os.environ["TEXT"]; print(json.dumps({
+            "blocks": [
+              {"type": "section", "text": {"type": "mrkdwn", "text": t}}
+            ]
+          }))')"
+
+          curl -sS -X POST \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "$PAYLOAD" \
+            "$WEBHOOK_URL"
