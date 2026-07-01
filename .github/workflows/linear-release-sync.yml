@@ -1,0 +1,143 @@
+name: Linear Release Sync
+
+on:
+  workflow_call:
+    inputs:
+      before_sha:
+        required: true
+        type: string
+      after_sha:
+        required: true
+        type: string
+    secrets:
+      LINEAR_API_KEY:
+        required: true
+
+jobs:
+  sync:
+    name: Sync issues to Done
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Transition PLA-N issues to Done
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BEFORE_SHA: ${{ inputs.before_sha }}
+          AFTER_SHA: ${{ inputs.after_sha }}
+        run: |
+          python3 << 'PYEOF'
+          import os, re, subprocess, json, urllib.request
+
+          def main():
+              key   = os.environ["LINEAR_API_KEY"]
+              before = os.environ["BEFORE_SHA"]
+              after  = os.environ["AFTER_SHA"]
+
+              def gql(query, variables=None):
+                  payload = json.dumps({"query": query, "variables": variables or {}}).encode()
+                  req = urllib.request.Request(
+                      "https://api.linear.app/graphql",
+                      data=payload,
+                      headers={"Authorization": key, "Content-Type": "application/json"},
+                  )
+                  with urllib.request.urlopen(req, timeout=15) as r:
+                      return json.loads(r.read())
+
+              # First push to branch has no meaningful before
+              if before == "0" * 40:
+                  print("First push to branch — nothing to sync")
+                  return
+
+              try:
+                  log = subprocess.run(
+                      ["git", "log", f"{before}..{after}", "--format=%s"],
+                      capture_output=True, text=True, check=True,
+                  ).stdout
+              except subprocess.CalledProcessError as e:
+                  print(f"Warning: git log failed ({e}) — skipping sync")
+                  return
+
+              issues = sorted(set(re.findall(r"PLA-\d+", log)))
+              if not issues:
+                  print("No PLA-N references in commit subjects — nothing to sync")
+                  return
+
+              print(f"Issues found: {', '.join(issues)}")
+              done_state_cache = {}  # team_id -> done state id
+
+              for identifier in issues:
+                  try:
+                      resp = gql("""
+                          query($id: String!) {
+                            issues(filter: { identifier: { eq: $id } }) {
+                              nodes {
+                                id
+                                state { id type }
+                                team  { id }
+                                children { nodes { id } }
+                              }
+                            }
+                          }
+                      """, {"id": identifier})
+
+                      nodes = resp.get("data", {}).get("issues", {}).get("nodes", [])
+                      if not nodes:
+                          print(f"  {identifier}: not found in Linear — skipped")
+                          continue
+
+                      issue      = nodes[0]
+                      state_type = issue["state"]["type"]
+                      issue_uuid = issue["id"]
+                      team_id    = issue["team"]["id"]
+                      children   = len(issue["children"]["nodes"])
+
+                      # AC2: only transition issues currently "started"
+                      if state_type != "started":
+                          print(f"  {identifier}: state='{state_type}' — skipped")
+                          continue
+
+                      # AC3: skip umbrella issues that have sub-issues
+                      if children > 0:
+                          print(f"  {identifier}: {children} sub-issue(s) — skipped (umbrella)")
+                          continue
+
+                      # AC5: resolve team's Done state by type=completed
+                      if team_id not in done_state_cache:
+                          tr = gql("""
+                              query($tid: String!) {
+                                team(id: $tid) { states { nodes { id type } } }
+                              }
+                          """, {"tid": team_id})
+                          completed = [s for s in tr["data"]["team"]["states"]["nodes"]
+                                       if s["type"] == "completed"]
+                          done_state_cache[team_id] = completed[0]["id"] if completed else None
+
+                      done_id = done_state_cache[team_id]
+                      if not done_id:
+                          print(f"  {identifier}: no completed state for team — skipped")
+                          continue
+
+                      mr = gql("""
+                          mutation($id: String!, $sid: String!) {
+                            issueUpdate(id: $id, input: { stateId: $sid }) { success }
+                          }
+                      """, {"id": issue_uuid, "sid": done_id})
+
+                      ok = mr.get("data", {}).get("issueUpdate", {}).get("success", False)
+                      print(f"  {identifier}: {'✅ moved to Done' if ok else '⚠️  update returned false'}")
+
+                  except Exception as e:
+                      # AC4: one issue failing must not stop the others
+                      print(f"  {identifier}: ⚠️  {type(e).__name__}: {e}")
+
+          try:
+              main()
+          except Exception as e:
+              # AC4: never gate a deploy on Linear sync
+              print(f"Linear sync error: {e}")
+          PYEOF
