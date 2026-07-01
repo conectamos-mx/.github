@@ -78,23 +78,19 @@ jobs:
                   try:
                       resp = gql("""
                           query($id: String!) {
-                            issues(filter: { identifier: { eq: $id } }) {
-                              nodes {
-                                id
-                                state { id type }
-                                team  { id }
-                                children { nodes { id } }
-                              }
+                            issue(id: $id) {
+                              id
+                              state { id type }
+                              team  { id }
+                              children { nodes { id } }
                             }
                           }
                       """, {"id": identifier})
 
-                      nodes = resp.get("data", {}).get("issues", {}).get("nodes", [])
-                      if not nodes:
+                      issue = resp.get("data", {}).get("issue")
+                      if not issue:
                           print(f"  {identifier}: not found in Linear — skipped")
                           continue
-
-                      issue      = nodes[0]
                       state_type = issue["state"]["type"]
                       issue_uuid = issue["id"]
                       team_id    = issue["team"]["id"]
