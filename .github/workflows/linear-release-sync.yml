@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Transition PLA-N issues to Done
+      - name: Transition referenced issues to Done
         continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -47,10 +47,16 @@ jobs:
                   )
                   try:
                       with urllib.request.urlopen(req, timeout=15) as r:
-                          return json.loads(r.read())
+                          resp = json.loads(r.read())
                   except urllib.error.HTTPError as e:
                       body = e.read().decode("utf-8", errors="replace")
                       raise RuntimeError(f"HTTP {e.code} — {body}") from e
+                  # Linear's issue()/team() are non-null: a not-found or permission
+                  # error nullifies `data` entirely and the cause lives in `errors`.
+                  if resp.get("errors"):
+                      msgs = "; ".join(err.get("message", "?") for err in resp["errors"])
+                      raise RuntimeError(f"GraphQL error: {msgs}")
+                  return resp
 
               # First push to branch has no meaningful before
               if before == "0" * 40:
@@ -66,12 +72,19 @@ jobs:
                   print(f"Warning: git log failed ({e}) — skipping sync")
                   return
 
-              issues = sorted(set(re.findall(r"PLA-\d+", log)))
+              issues = sorted(set(re.findall(r"(?:PLA|TECH)-\d+", log)))
               if not issues:
-                  print("No PLA-N references in commit subjects — nothing to sync")
+                  print("No PLA-N/TECH-N references in commit subjects — nothing to sync")
                   return
 
               print(f"Issues found: {', '.join(issues)}")
+
+              # Preflight: log which workspace the key belongs to, so a
+              # wrong-workspace key is obvious from the run log.
+              org = gql("query { organization { name urlKey } viewer { email } }")["data"]
+              print(f"Linear workspace: {org['organization']['name']} "
+                    f"({org['organization']['urlKey']}) as {org['viewer']['email']}")
+
               done_state_cache = {}  # team_id -> done state id
 
               for identifier in issues:
@@ -87,7 +100,7 @@ jobs:
                           }
                       """, {"id": identifier})
 
-                      issue = resp.get("data", {}).get("issue")
+                      issue = (resp.get("data") or {}).get("issue")
                       if not issue:
                           print(f"  {identifier}: not found in Linear — skipped")
                           continue
@@ -113,8 +126,9 @@ jobs:
                                 team(id: $tid) { states { nodes { id type } } }
                               }
                           """, {"tid": team_id})
-                          completed = [s for s in tr["data"]["team"]["states"]["nodes"]
-                                       if s["type"] == "completed"]
+                          nodes = (((tr.get("data") or {}).get("team") or {})
+                                   .get("states") or {}).get("nodes") or []
+                          completed = [s for s in nodes if s["type"] == "completed"]
                           done_state_cache[team_id] = completed[0]["id"] if completed else None
 
                       done_id = done_state_cache[team_id]
@@ -128,7 +142,7 @@ jobs:
                           }
                       """, {"id": issue_uuid, "sid": done_id})
 
-                      ok = mr.get("data", {}).get("issueUpdate", {}).get("success", False)
+                      ok = ((mr.get("data") or {}).get("issueUpdate") or {}).get("success", False)
                       print(f"  {identifier}: {'✅ moved to Done' if ok else '⚠️  update returned false'}")
 
                   except Exception as e:
