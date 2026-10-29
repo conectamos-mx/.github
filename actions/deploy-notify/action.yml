@@ -1,0 +1,92 @@
+name: Deploy Notify
+description: >
+  Aviso de deploy a Slack como paso del job que ya corre (PLA-1771). Mismo
+  mensaje que notification.yml, pero sin levantar un job aparte: GitHub cobra
+  cada job redondeado al minuto y el aviso tarda ~10 s. Nunca falla el job que
+  lo llama.
+
+inputs:
+  status:
+    description: "success | failure | cancelled (normalmente job.status)"
+    required: true
+  environment:
+    description: "Production | Development"
+    required: true
+  service_name:
+    required: true
+  service_url:
+    description: "URL del servicio; se muestra N/A si el deploy no salió bien"
+    required: false
+    default: "N/A"
+  webhook_url:
+    description: "secrets.DEVOPS_WEBHOOK_URL (una composite action no lee secrets)"
+    required: true
+  members_map:
+    description: "secrets.SLACK_MEMBERS_MAP: JSON {github_login: slack_id} para mencionar al actor si falla"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Send deployment notification to Slack
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook_url }}
+        SLACK_MEMBERS_MAP: ${{ inputs.members_map }}
+        STATUS: ${{ inputs.status }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        SERVICE_NAME: ${{ inputs.service_name }}
+        SERVICE_URL: ${{ inputs.service_url }}
+        COMMIT_SHA: ${{ github.sha }}
+        HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -uo pipefail
+
+        if [ -z "$WEBHOOK_URL" ]; then
+          echo "::warning::DEVOPS_WEBHOOK_URL vacío; no se manda el aviso de deploy."
+          exit 0
+        fi
+
+        COMMIT_SHA_SHORT="${COMMIT_SHA:0:7}"
+        # push trae head_commit; workflow_dispatch no, y ahí se lee del checkout si lo hay.
+        COMMIT_MSG="$(printf '%s' "$HEAD_COMMIT_MSG" | head -n 1)"
+        if [ -z "$COMMIT_MSG" ]; then
+          COMMIT_MSG="$(git log -1 --pretty=%s "$COMMIT_SHA" 2>/dev/null || true)"
+        fi
+        COMMIT_MSG="${COMMIT_MSG:-Manual deployment}"
+        NOW_UTC="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+        SLACK_MENTION=""
+        if [ "$STATUS" = "success" ]; then
+          STATUS_LINE="✅ *Deployment exitoso - ${SERVICE_NAME}*"
+        else
+          STATUS_LINE="❌ *Deployment falló - ${SERVICE_NAME}*"
+          SERVICE_URL="N/A"
+          if [ -n "$SLACK_MEMBERS_MAP" ]; then
+            SLACK_ID="$(python3 -c 'import json,os; m=json.loads(os.environ.get("SLACK_MEMBERS_MAP") or "{}"); print(m.get(os.environ["ACTOR"],""))' 2>/dev/null || true)"
+            if [ -n "$SLACK_ID" ]; then
+              SLACK_MENTION="<@${SLACK_ID}> "
+            fi
+          fi
+        fi
+
+        TEXT="$(printf '*[ DEPLOYMENT LOG ]*\n%s\n\n🌐 *URL:* %s\n📦 *Servicio:* %s (%s)\n🔨 *Commit:* %s (`%s`)\n👤 *Por:* %s\n⏰ *Hora:* %s%s' \
+          "$STATUS_LINE" \
+          "$SERVICE_URL" \
+          "$SERVICE_NAME" "$ENVIRONMENT" \
+          "$COMMIT_MSG" "$COMMIT_SHA_SHORT" \
+          "$ACTOR" \
+          "$NOW_UTC" \
+          "${SLACK_MENTION:+$'\n'"${SLACK_MENTION}"}")"
+        export TEXT
+
+        PAYLOAD="$(python3 -c 'import json,os; print(json.dumps({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": os.environ["TEXT"]}}]}))')"
+
+        curl -sS --max-time 15 -X POST \
+          -H 'Content-type: application/json; charset=utf-8' \
+          --data "$PAYLOAD" \
+          "$WEBHOOK_URL" \
+          || echo "::warning::No se pudo mandar el aviso de deploy a Slack."
+        exit 0
