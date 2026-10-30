@@ -98,3 +98,22 @@ resource "aws_lambda_function_url" "pr_notify" {
   function_name      = aws_lambda_function.pr_notify.function_name
   authorization_type = "NONE"
 }
+
+# Creada por API (no por consola), una URL con auth NONE no trae la política que
+# la abre: sin estos dos permisos responde 403. InvokeFunction queda acotado a la
+# URL, así nadie la invoca directo por la API de Lambda.
+resource "aws_lambda_permission" "url" {
+  statement_id           = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.pr_notify.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_lambda_permission" "invoke_via_url" {
+  statement_id             = "FunctionURLAllowInvokeAction"
+  action                   = "lambda:InvokeFunction"
+  function_name            = aws_lambda_function.pr_notify.function_name
+  principal                = "*"
+  invoked_via_function_url = true
+}

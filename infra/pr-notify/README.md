@@ -26,7 +26,8 @@ Se aplica a mano: el stack cambia casi nunca y así no hay workflow ni rol OIDC 
 
 ```bash
 aws login --profile conectamos-prod
-export AWS_PROFILE=conectamos-prod
+# Terraform no entiende las credenciales de `aws login`: se le pasan exportadas.
+eval "$(aws configure export-credentials --profile conectamos-prod --format env)"
 terraform init
 terraform apply
 ```
