@@ -16,16 +16,17 @@ GitHub (webhook de la org, evento pull_request) → Function URL → Lambda → 
 - **Fallos:** si Slack no responde, la Lambda devuelve 502 y GitHub marca la entrega
   como fallida (Settings → Webhooks → Recent Deliveries → *Redeliver*).
 
-Cuenta AWS: AI (`029750300642`, perfil `conectamos-ai`). State en
-`s3://conectamos-tfstate-ai/pr-notify/terraform.tfstate`.
+Cuenta AWS: prod (`114743615563`, perfil `conectamos-prod`). State en
+`s3://conectamos-tfstate-prod/pr-notify/terraform.tfstate`. Una sola Lambda para
+todos los repos de la org.
 
 ## Aplicar
 
 Se aplica a mano: el stack cambia casi nunca y así no hay workflow ni rol OIDC que mantener.
 
 ```bash
-aws sso login --profile conectamos-ai
-export AWS_PROFILE=conectamos-ai
+aws login --profile conectamos-prod
+export AWS_PROFILE=conectamos-prod
 terraform init
 terraform apply
 ```
@@ -61,5 +62,5 @@ Si es el del webhook, actualizarlo también en GitHub.
 ## Logs
 
 ```bash
-aws logs tail /aws/lambda/pr-notify --since 1h --profile conectamos-ai
+aws logs tail /aws/lambda/pr-notify --since 1h --profile conectamos-prod
 ```
