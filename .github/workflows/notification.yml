@@ -1,3 +1,6 @@
+# DEPRECADO (PLA-1771): usar la action `conectamos-mx/.github/actions/deploy-notify@main`
+# como paso al final del job de deploy. Como job aparte, cada aviso se cobra
+# como 1 minuto de Actions. Sigue funcionando para los repos que no migraron.
 name: Notify
 
 on:
@@ -41,6 +44,9 @@ jobs:
     notify:
         runs-on: ubuntu-latest
         steps:
+            - name: Aviso de deprecación
+              run: echo "::warning title=notification.yml deprecado::Usar conectamos-mx/.github/actions/deploy-notify@main como paso del job de deploy (PLA-1771)."
+
             - name: Checkout code
               uses: actions/checkout@v6
 
