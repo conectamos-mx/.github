@@ -9,7 +9,7 @@ GitHub (webhook de la org, evento pull_request) → Function URL → Lambda → 
 ```
 
 - **Eventos:** `opened`, `ready_for_review`, `reopened`, `review_requested`, `closed` (mergeada o no).
-- **Repos:** `var.repos` (hoy `platform-api`, `conectamos-platform`, `brain`). Vacío = todos.
+- **Repos:** `var.repos` (los que tenían `pr-notify.yml`: `platform-api`, `conectamos-platform`, `brain`, `brightcell-api`, `zoe-integration`, `os`). Vacío = todos.
 - **Mensaje:** el mismo `[ PR LOG ]` de `pr-notification.yml`, al mismo canal.
 - **Seguridad:** la Function URL es pública; todo lo que no traiga la firma
   `X-Hub-Signature-256` del secret del webhook responde 401.
