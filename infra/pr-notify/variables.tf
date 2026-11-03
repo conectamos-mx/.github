@@ -26,6 +26,6 @@ variable "deploy_services" {
     "conectamos-platform"   = { service = "conectamos-platform", prod_url = "https://platform.conectamos.ai", dev_url = "https://platform-dev.conectamos.ai" }
     "brain"                 = { service = "gustavo-integration", prod_url = "https://gustavo.conectamos.ai", dev_url = "https://gustavo-dev.conectamos.ai" }
     "jupiter"               = { service = "llm-gateway", prod_url = "https://jupiter.conectamos.ai" }
-    "conectamos-dashboards" = { service = "conectamos-dashboards", prod_url = "https://dashboard.conectamos.ai" }
+    "conectamos-dashboards" = { service = "conectamos-dashboards", prod_url = "https://dashboard.conectamos.ai", dev_url = "https://dashboard-dev.conectamos.ai" }
   }
 }
