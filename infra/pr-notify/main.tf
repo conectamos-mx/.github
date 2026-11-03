@@ -1,6 +1,6 @@
 # =============================================================================
-# pr-notify — avisos de PR a Slack sin GitHub Actions (PLA-1771)
-# Webhook de la org (evento pull_request) -> Function URL -> Lambda -> Slack.
+# pr-notify — avisos de PR y de deploy a Slack sin GitHub Actions (PLA-1771)
+# Webhook de la org (pull_request, workflow_run) -> Function URL -> Lambda -> Slack.
 # =============================================================================
 
 locals {
@@ -22,14 +22,25 @@ resource "aws_secretsmanager_secret" "github_webhook_secret" {
   description = "Secret del webhook de la org conectamos-mx (firma X-Hub-Signature-256)"
 }
 
+resource "aws_secretsmanager_secret" "deploy_slack_webhooks" {
+  name        = "deploy-notify/SLACK_WEBHOOKS"
+  description = "JSON {repo: incoming webhook}; la clave default (devops-alerts) cubre al resto"
+}
+
+resource "aws_secretsmanager_secret" "slack_members_map" {
+  name        = "deploy-notify/SLACK_MEMBERS_MAP"
+  description = "JSON {github_login: slack_member_id} para mencionar al actor de un deploy fallido"
+}
+
 # -----------------------------------------------------------------------------
 # Lambda
 # -----------------------------------------------------------------------------
 
 data "archive_file" "lambda" {
   type        = "zip"
-  source_file = "${path.module}/lambda/pr_notify.py"
-  output_path = "${path.module}/lambda/pr_notify.zip"
+  source_dir  = "${path.module}/lambda"
+  excludes    = ["__pycache__"]
+  output_path = "${path.module}/build/lambda.zip"
 }
 
 resource "aws_iam_role" "lambda" {
@@ -62,6 +73,8 @@ resource "aws_iam_role_policy" "secrets" {
       Resource = [
         aws_secretsmanager_secret.slack_webhook_url.arn,
         aws_secretsmanager_secret.github_webhook_secret.arn,
+        aws_secretsmanager_secret.deploy_slack_webhooks.arn,
+        aws_secretsmanager_secret.slack_members_map.arn,
       ]
     }]
   })
@@ -75,7 +88,7 @@ resource "aws_cloudwatch_log_group" "lambda" {
 resource "aws_lambda_function" "pr_notify" {
   function_name    = local.name
   role             = aws_iam_role.lambda.arn
-  handler          = "pr_notify.handler"
+  handler          = "app.handler"
   runtime          = "python3.12"
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
@@ -86,6 +99,9 @@ resource "aws_lambda_function" "pr_notify" {
       REPOS                    = join(",", var.repos)
       SLACK_WEBHOOK_URL_ID     = aws_secretsmanager_secret.slack_webhook_url.arn
       GITHUB_WEBHOOK_SECRET_ID = aws_secretsmanager_secret.github_webhook_secret.arn
+      DEPLOY_SERVICES          = jsonencode(var.deploy_services)
+      DEPLOY_SLACK_WEBHOOKS_ID = aws_secretsmanager_secret.deploy_slack_webhooks.arn
+      SLACK_MEMBERS_MAP_ID     = aws_secretsmanager_secret.slack_members_map.arn
     }
   }
 
