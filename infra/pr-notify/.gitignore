@@ -1,2 +1,4 @@
 lambda/*.zip
+build/
 .terraform/
+__pycache__/
